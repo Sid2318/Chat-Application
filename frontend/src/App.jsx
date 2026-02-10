@@ -1,89 +1,221 @@
 import { useState, useEffect } from "react";
 import io from "socket.io-client";
 import "./App.css";
+import ChatSidebar from "./components/ChatSidebar";
+import ChatWindow from "./components/ChatWindow";
+import LoginForm from "./components/LoginForm";
 
 function App() {
   const [socket, setSocket] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [messageInput, setMessageInput] = useState("");
   const [username, setUsername] = useState("");
   const [isConnected, setIsConnected] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [rooms, setRooms] = useState([]);
+  const [currentChat, setCurrentChat] = useState(null); // { type: 'private'|'group', name: '', chatId: '' }
+  const [messages, setMessages] = useState({});
+  const [activeChats, setActiveChats] = useState([]);
 
   useEffect(() => {
-    const newSocket = io("http://localhost:3000");
-    setSocket(newSocket);
+    if (username) {
+      const newSocket = io("http://localhost:3001");
+      setSocket(newSocket);
 
-    newSocket.on("connect", () => {
-      setIsConnected(true);
-      console.log("Connected to server");
-    });
-
-    newSocket.on("disconnect", () => {
-      setIsConnected(false);
-      console.log("Disconnected from server");
-    });
-
-    newSocket.on("chat_message", (data) => {
-      setMessages((prev) => [...prev, data]);
-    });
-
-    return () => {
-      newSocket.close();
-    };
-  }, []);
-
-  const sendMessage = (e) => {
-    e.preventDefault();
-    if (messageInput.trim() && username.trim() && socket) {
-      socket.emit("chat_message", {
-        user: username,
-        message: messageInput,
+      newSocket.on("connect", () => {
+        setIsConnected(true);
+        console.log("Connected to server");
+        newSocket.emit("join_chat", { username });
       });
-      setMessageInput("");
+
+      newSocket.on("disconnect", () => {
+        setIsConnected(false);
+        console.log("Disconnected from server");
+      });
+
+      // Handle user list updates
+      newSocket.on("users_updated", (userList) => {
+        setUsers(userList.filter((user) => user !== username));
+      });
+
+      // Handle room list updates
+      newSocket.on("rooms_updated", (roomList) => {
+        setRooms(roomList);
+      });
+
+      // Handle private chat started
+      newSocket.on("private_chat_started", (data) => {
+        const { chatId, targetUser } = data;
+        const newChat = {
+          id: chatId,
+          type: "private",
+          name: targetUser,
+          participants: [username, targetUser],
+        };
+
+        setActiveChats((prev) => {
+          const exists = prev.find((chat) => chat.id === chatId);
+          if (!exists) {
+            return [...prev, newChat];
+          }
+          return prev;
+        });
+
+        setCurrentChat(newChat);
+      });
+
+      // Handle private messages
+      newSocket.on("private_message", (messageData) => {
+        const { chatId } = messageData;
+        setMessages((prev) => ({
+          ...prev,
+          [chatId]: [...(prev[chatId] || []), messageData],
+        }));
+      });
+
+      // Handle group messages
+      newSocket.on("group_message", (messageData) => {
+        const { roomName } = messageData;
+        setMessages((prev) => ({
+          ...prev,
+          [roomName]: [...(prev[roomName] || []), messageData],
+        }));
+      });
+
+      // Handle user joined room
+      newSocket.on("user_joined_room", (data) => {
+        const { roomName } = data;
+        setMessages((prev) => ({
+          ...prev,
+          [roomName]: [...(prev[roomName] || []), { ...data, type: "system" }],
+        }));
+      });
+
+      // Handle user left room
+      newSocket.on("user_left_room", (data) => {
+        const { roomName } = data;
+        setMessages((prev) => ({
+          ...prev,
+          [roomName]: [...(prev[roomName] || []), { ...data, type: "system" }],
+        }));
+      });
+
+      // Handle group created
+      newSocket.on("group_created", (data) => {
+        const { groupName } = data;
+        const newChat = {
+          id: groupName,
+          type: "group",
+          name: groupName,
+          participants: [username],
+        };
+
+        setActiveChats((prev) => [...prev, newChat]);
+        setCurrentChat(newChat);
+      });
+
+      return () => {
+        newSocket.close();
+      };
+    }
+  }, [username]);
+
+  const handleLogin = (enteredUsername) => {
+    setUsername(enteredUsername);
+  };
+
+  const startPrivateChat = (targetUser) => {
+    if (socket && targetUser !== username) {
+      socket.emit("start_private_chat", {
+        targetUser,
+        currentUser: username,
+      });
     }
   };
+
+  const joinRoom = (roomName) => {
+    if (socket) {
+      socket.emit("join_room", { roomName, username });
+      const newChat = {
+        id: roomName,
+        type: "group",
+        name: roomName,
+        participants: [],
+      };
+
+      setActiveChats((prev) => {
+        const exists = prev.find((chat) => chat.id === roomName);
+        if (!exists) {
+          return [...prev, newChat];
+        }
+        return prev;
+      });
+
+      setCurrentChat(newChat);
+    }
+  };
+
+  const createGroup = (groupName) => {
+    if (socket && groupName.trim()) {
+      socket.emit("create_group", {
+        groupName: groupName.trim(),
+        creator: username,
+      });
+    }
+  };
+
+  const sendMessage = (message) => {
+    if (!socket || !currentChat || !message.trim()) return;
+
+    if (currentChat.type === "private") {
+      socket.emit("private_message", {
+        chatId: currentChat.id,
+        message: message.trim(),
+        sender: username,
+        receiver: currentChat.name,
+      });
+    } else if (currentChat.type === "group") {
+      socket.emit("group_message", {
+        roomName: currentChat.name,
+        message: message.trim(),
+        username,
+      });
+    }
+  };
+
+  if (!username) {
+    return <LoginForm onLogin={handleLogin} />;
+  }
 
   return (
     <div className="chat-app">
       <div className="chat-header">
-        <h1>Simple Chat App</h1>
-        <p>Status: {isConnected ? "🟢 Connected" : "🔴 Disconnected"}</p>
+        <h1>WhatsApp Clone</h1>
+        <div className="user-info">
+          <span>Welcome, {username}</span>
+          <span className={`status ${isConnected ? "online" : "offline"}`}>
+            {isConnected ? "🟢 Online" : "🔴 Offline"}
+          </span>
+        </div>
       </div>
 
-      {!username ? (
-        <div className="username-form">
-          <input
-            type="text"
-            placeholder="Enter your username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && setUsername(username)}
-          />
-          <button onClick={() => setUsername(username)}>Join Chat</button>
-        </div>
-      ) : (
-        <div className="chat-container">
-          <div className="messages">
-            {messages.map((msg) => (
-              <div key={msg.id} className="message">
-                <span className="username">{msg.user}:</span>
-                <span className="text">{msg.message}</span>
-                <span className="time">{msg.timestamp}</span>
-              </div>
-            ))}
-          </div>
+      <div className="chat-layout">
+        <ChatSidebar
+          users={users}
+          rooms={rooms}
+          activeChats={activeChats}
+          currentChat={currentChat}
+          onSelectChat={setCurrentChat}
+          onStartPrivateChat={startPrivateChat}
+          onJoinRoom={joinRoom}
+          onCreateGroup={createGroup}
+        />
 
-          <form onSubmit={sendMessage} className="message-form">
-            <input
-              type="text"
-              value={messageInput}
-              onChange={(e) => setMessageInput(e.target.value)}
-              placeholder="Type a message..."
-            />
-            <button type="submit">Send</button>
-          </form>
-        </div>
-      )}
+        <ChatWindow
+          currentChat={currentChat}
+          messages={messages[currentChat?.id] || []}
+          onSendMessage={sendMessage}
+          currentUser={username}
+        />
+      </div>
     </div>
   );
 }
