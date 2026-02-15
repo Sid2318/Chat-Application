@@ -1,8 +1,21 @@
 import { useState, useEffect, useRef } from "react";
+import { useForm } from "../hooks";
+import { chatUtils, validators } from "../utils";
 
-const ChatWindow = ({ currentChat, messages, onSendMessage, currentUser }) => {
-  const [messageInput, setMessageInput] = useState("");
+const ChatWindow = ({ currentChat, messages, onSendMessage, currentUser, isConnected }) => {
   const messagesEndRef = useRef(null);
+  const [isTyping, setIsTyping] = useState(false);
+  
+  const {
+    values,
+    errors,
+    setValue,
+    validate,
+    reset
+  } = useForm(
+    { message: '' },
+    { message: validators.message }
+  );
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -14,32 +27,46 @@ const ChatWindow = ({ currentChat, messages, onSendMessage, currentUser }) => {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (messageInput.trim()) {
-      onSendMessage(messageInput);
-      setMessageInput("");
+    
+    if (!validate() || !isConnected) {
+      return;
+    }
+
+    const message = values.message.trim();
+    if (message) {
+      onSendMessage(message);
+      reset();
     }
   };
 
-  const formatTime = (timestamp) => {
-    return timestamp || new Date().toLocaleTimeString();
+  const handleMessageChange = (e) => {
+    setValue('message', e.target.value);
   };
 
-  const renderMessage = (message) => {
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
+  };
+
+  const renderMessage = (message, index) => {
     const isOwnMessage = message.user === currentUser;
-    const isSystemMessage = message.type === "system";
+    const isSystemMessage = message.type === 'system';
+    const messageKey = message.id || `${index}-${message.timestamp}`;
 
     if (isSystemMessage) {
       return (
-        <div key={message.id || Math.random()} className="system-message">
+        <div key={messageKey} className="system-message">
           <span>{message.message}</span>
-          <span className="time">{formatTime(message.timestamp)}</span>
+          <span className="time">{chatUtils.formatTimestamp(message.timestamp)}</span>
         </div>
       );
     }
 
     return (
-      <div
-        key={message.id || Math.random()}
+      <div 
+        key={messageKey} 
         className={`message ${isOwnMessage ? "own-message" : "other-message"}`}
       >
         <div className="message-content">
@@ -47,7 +74,14 @@ const ChatWindow = ({ currentChat, messages, onSendMessage, currentUser }) => {
             <div className="message-sender">{message.user}</div>
           )}
           <div className="message-text">{message.message}</div>
-          <div className="message-time">{formatTime(message.timestamp)}</div>
+          <div className="message-time">
+            {chatUtils.formatTimestamp(message.timestamp)}
+            {isOwnMessage && (
+              <span className="message-status">
+                ✓
+              </span>
+            )}
+          </div>
         </div>
       </div>
     );
